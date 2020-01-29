@@ -1,0 +1,1182 @@
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: build-task
+spec:
+  params:
+  - name: registry-namespace
+    value: The namespace in the container image registry. You can set it up with {bx
+      cr namespace-add]. Learn more at https://cloud.ibm.com/docs/services/Registry?topic=registry-getting-started#getting-started.
+  - name: build-cluster-namespace
+    value: Cluster namespace
+  - name: build-cluster-name
+    value: Build Cluster
+  - name: prod-cluster-namespace
+    value: Cluster namespace
+  - name: build-region
+    value: Build region
+  - name: vault_name
+    value: Specify the Key Protect instance name, where the image signing keys have
+      been stored. The build and validation signer fields contain default names for
+      these signers. The values must match the values created in the Key-Management-Admin-Template.
+      See https://github.com/open-toolchain/key-management-admin-toolchain
+  - name: repository
+    value: The git repo
+  - name: prod-region
+    value: Cluster region
+  - name: app-name
+    value: The name of your app
+  - name: revision
+    value: the branch for the gir repo
+  - name: prod-cluster-name
+    value: Cluster name
+  - name: registry-region
+    value: The IBM Cloud region for image registry
+  - name: api-key
+    value: The IBM Cloud API key is used to access the IBM Cloud Kubernetes Service
+      API and interact with the cluster. You can obtain your API key with 'bx iam
+      api-key-create' or via the console at https://cloud.ibm.com/iam#/apikeys by
+      clicking **Create API key** (Each API key only can be viewed once).
+  - name: prod-resource-group
+    value: Resource Group
+  - name: build-resource-group
+    value: Build Resource Group
+  steps:
+  - name: clone-step
+    image: alpine/git
+    command: '["/bin/sh", "-c"]'
+    args:
+    - "set -e -o pipefail; \r echo \"Cloning $REPOSITORY\";\r git clone -q -b $REVISION\
+      \ $REPOSITORY .;"
+    env:
+    - name: REPOSITORY
+      value: $(inputs.params.repository)
+    - name: REVISION
+      value: $(inputs.params.revision)
+  - name: Fetch code
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |
+      #!/bin/bash
+      # set -x
+
+      # Git repo cloned at $WORKING_DIR, copy into $ARCHIVE_DIR
+      mkdir -p $ARCHIVE_DIR
+      cp -R -n ./ $ARCHIVE_DIR/ || true
+
+      # Record git info
+      echo "GIT_URL=${GIT_URL}" >> $ARCHIVE_DIR/build.properties
+      echo "GIT_BRANCH=${GIT_BRANCH}" >> $ARCHIVE_DIR/build.properties
+      echo "GIT_COMMIT=${GIT_COMMIT}" >> $ARCHIVE_DIR/build.properties
+      echo "SOURCE_BUILD_NUMBER=${BUILD_NUMBER}" >> $ARCHIVE_DIR/build.properties
+      cat $ARCHIVE_DIR/build.properties
+
+      # check if doi is integrated in this toolchain
+      if jq -e '.services[] | select(.service_id=="draservicebroker")' _toolchain.json; then
+        # Record build information
+        ibmcloud login --apikey ${IBM_CLOUD_API_KEY} --no-region
+        ibmcloud doi publishbuildrecord --branch ${GIT_BRANCH} --repositoryurl ${GIT_URL} --commitid ${GIT_COMMIT} \
+          --buildnumber ${BUILD_NUMBER} --logicalappname ${IMAGE_NAME} --status pass
+      fi
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Unit Tests
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |-
+      #!/bin/bash
+      # set -x
+      if [ -f ./tests/run-tests.sh ]; then
+        source ./tests/run-tests.sh
+        RESULT=$?
+        if [ ! -z "${FILE_LOCATION}"]; then
+          if [ ${RESULT} -ne 0 ]; then STATUS=fail; else STATUS=pass; fi
+            if jq -e '.services[] | select(.service_id=="draservicebroker")' _toolchain.json; then
+              ibmcloud login --apikey ${IBM_CLOUD_API_KEY} --no-region
+              ibmcloud doi publishtestrecord --type unittest --buildnumber ${BUILD_NUMBER} --filelocation ${FILE_LOCATION} \
+                --buildnumber ${BUILD_NUMBER} --logicalappname ${IMAGE_NAME} --status ${STATUS}
+            fi
+          exit $RESULT
+        fi
+      else
+        echo "Test runner script not found: ./tests/run-tests.sh"
+      fi
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  volumes:
+  - name: task-volume
+    persistentVolumeClaim:
+      name: $(inputs.params.task-pvc)
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: containerize-task
+spec:
+  params:
+  - name: registry-namespace
+    value: The namespace in the container image registry. You can set it up with {bx
+      cr namespace-add]. Learn more at https://cloud.ibm.com/docs/services/Registry?topic=registry-getting-started#getting-started.
+  - name: build-cluster-namespace
+    value: Cluster namespace
+  - name: build-cluster-name
+    value: Build Cluster
+  - name: prod-cluster-namespace
+    value: Cluster namespace
+  - name: build-region
+    value: Build region
+  - name: vault_name
+    value: Specify the Key Protect instance name, where the image signing keys have
+      been stored. The build and validation signer fields contain default names for
+      these signers. The values must match the values created in the Key-Management-Admin-Template.
+      See https://github.com/open-toolchain/key-management-admin-toolchain
+  - name: repository
+    value: The git repo
+  - name: prod-region
+    value: Cluster region
+  - name: app-name
+    value: The name of your app
+  - name: revision
+    value: the branch for the gir repo
+  - name: prod-cluster-name
+    value: Cluster name
+  - name: registry-region
+    value: The IBM Cloud region for image registry
+  - name: api-key
+    value: The IBM Cloud API key is used to access the IBM Cloud Kubernetes Service
+      API and interact with the cluster. You can obtain your API key with 'bx iam
+      api-key-create' or via the console at https://cloud.ibm.com/iam#/apikeys by
+      clicking **Create API key** (Each API key only can be viewed once).
+  - name: prod-resource-group
+    value: Resource Group
+  - name: build-resource-group
+    value: Build Resource Group
+  steps:
+  - name: clone-step
+    image: alpine/git
+    command: '["/bin/sh", "-c"]'
+    args:
+    - "set -e -o pipefail; \r echo \"Cloning $REPOSITORY\";\r git clone -q -b $REVISION\
+      \ $REPOSITORY .;"
+    env:
+    - name: REPOSITORY
+      value: $(inputs.params.repository)
+    - name: REVISION
+      value: $(inputs.params.revision)
+  - name: Check dockerfile
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |-
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      # copy the script below into your app code repo (e.g. ./scripts/check_dockerfile.sh) and 'source' it from your pipeline job
+      #    source ./scripts/check_prebuild.sh
+      # alternatively, you can source it from online script:
+      #    source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_dockerfile.sh")
+      # ------------------
+      # source: https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_dockerfile.sh
+
+      # This script lints Dockerfile.
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_dockerfile.sh")
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Check registry
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |-
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      # copy the script below into your app code repo (e.g. ./scripts/check_registry.sh) and 'source' it from your pipeline job
+      #    source ./scripts/check_registry.sh
+      # alternatively, you can source it from online script:
+      #    source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_registry.sh")
+      # ------------------
+      # source: https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_registry.sh
+
+      # This script checks presence of registry namespace.
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_registry.sh")
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Static Analysis
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      echo "PLACE HOLDER STATIC ANALYSIS"
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Build Signed Docker image
+    image: ibmcom/pipeline-base-image:latest
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |
+      #!/bin/bash
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/add_docker.sh")
+      source <(curl -s -S -L "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/setup_dind.sh")
+      # configure the container registry
+      REGISTRY_REGION=$(echo "$REGISTRY_REGION" | awk -F ':' '{print $NF;}')
+      ibmcloud cr region-set $REGISTRY_REGION
+      # login docker to ibm container registry
+      ibmcloud cr login
+      # Initialize the REGISTRY_URL and DOCKER_CONTENT_TRUST_SERVER
+      export REGISTRY_URL=$(ibmcloud cr info | grep -m1 -i '^Container Registry' | awk '{print $3;}')
+      export DOCKER_CONTENT_TRUST_SERVER="https://$REGISTRY_URL:4443"
+
+      echo "Vault instance $VAULT_INSTANCE used to retrieve signing keys"
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/signing_utils.sh")
+      # Restore repository pem key and signer pem key
+      VAULT_DATA=$(buildVaultAccessDetailsJSON "$VAULT_INSTANCE" "$IBMCLOUD_TARGET_REGION" "$IBMCLOUD_TARGET_RESOURCE_GROUP")
+      JSON_DATA="$(readData "$REGISTRY_NAMESPACE.keys" "$VAULT_DATA")"
+      signerkey=$(getJSONValue "$DEVOPS_SIGNER" "$JSON_DATA")
+      writeFile "$signerkey"
+      # Retrieve the signer passphrase
+      export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=$(getJSONValue "passphrase" "$signerkey")
+
+      export DCT_DISABLED=false
+      source <(curl -s -S -L "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/build_image_dind.sh")
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  volumes:
+  - name: task-volume
+    persistentVolumeClaim:
+      name: $(inputs.params.task-pvc)
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: validate-task
+spec:
+  params:
+  - name: registry-namespace
+    value: The namespace in the container image registry. You can set it up with {bx
+      cr namespace-add]. Learn more at https://cloud.ibm.com/docs/services/Registry?topic=registry-getting-started#getting-started.
+  - name: build-cluster-namespace
+    value: Cluster namespace
+  - name: build-cluster-name
+    value: Build Cluster
+  - name: prod-cluster-namespace
+    value: Cluster namespace
+  - name: build-region
+    value: Build region
+  - name: vault_name
+    value: Specify the Key Protect instance name, where the image signing keys have
+      been stored. The build and validation signer fields contain default names for
+      these signers. The values must match the values created in the Key-Management-Admin-Template.
+      See https://github.com/open-toolchain/key-management-admin-toolchain
+  - name: repository
+    value: The git repo
+  - name: prod-region
+    value: Cluster region
+  - name: app-name
+    value: The name of your app
+  - name: revision
+    value: the branch for the gir repo
+  - name: prod-cluster-name
+    value: Cluster name
+  - name: registry-region
+    value: The IBM Cloud region for image registry
+  - name: api-key
+    value: The IBM Cloud API key is used to access the IBM Cloud Kubernetes Service
+      API and interact with the cluster. You can obtain your API key with 'bx iam
+      api-key-create' or via the console at https://cloud.ibm.com/iam#/apikeys by
+      clicking **Create API key** (Each API key only can be viewed once).
+  - name: prod-resource-group
+    value: Resource Group
+  - name: build-resource-group
+    value: Build Resource Group
+  steps:
+  - name: clone-step
+    image: alpine/git
+    command: '["/bin/sh", "-c"]'
+    args:
+    - "set -e -o pipefail; \r echo \"Cloning $REPOSITORY\";\r git clone -q -b $REVISION\
+      \ $REPOSITORY .;"
+    env:
+    - name: REPOSITORY
+      value: $(inputs.params.repository)
+    - name: REVISION
+      value: $(inputs.params.revision)
+  - name: Check vulnerabilities
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      # Check for vulnerabilities of built image using Vulnerability Advisor
+      # PIPELINE_IMAGE_URL is defined because of tester type VA and use_image_from_build_input: true
+      # unset it in order to recompute using build.properties value
+      unset PIPELINE_IMAGE_URL
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_vulnerabilities.sh")
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Secrets Detection
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      # Check for vulnerabilities of built image using Vulnerability Advisor
+      # PIPELINE_IMAGE_URL is defined because of tester type VA and use_image_from_build_input: true
+      # unset it in order to recompute using build.properties value
+      echo "PLACE HOLDER SECRETS DETECTION"
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Additional Image Checks
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      # Check for vulnerabilities of built image using Vulnerability Advisor
+      # PIPELINE_IMAGE_URL is defined because of tester type VA and use_image_from_build_input: true
+      # unset it in order to recompute using build.properties value
+      echo "PLACE HOLDER Additional Image checks"
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Sign Image for Validation
+    image: ibmcom/pipeline-base-image:latest
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |-
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/add_docker.sh")
+      # Sign the built image as validated
+      source <(curl -s -S -L "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/setup_dind.sh")
+      # configure the container registry
+      REGISTRY_REGION=$(echo "$REGISTRY_REGION" | awk -F ':' '{print $NF;}')
+      ibmcloud cr region-set $REGISTRY_REGION
+      # login docker to ibm container registry
+      ibmcloud cr login
+      # Initialize the REGISTRY_URL and DOCKER_CONTENT_TRUST_SERVER
+      export REGISTRY_URL=$(ibmcloud cr info | grep -m1 -i '^Container Registry' | awk '{print $3;}')
+      export DOCKER_CONTENT_TRUST_SERVER="https://$REGISTRY_URL:4443"
+
+
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/sign_image_with_vault_keys.sh")
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  volumes:
+  - name: task-volume
+    persistentVolumeClaim:
+      name: $(inputs.params.task-pvc)
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: deploy stage-task
+spec:
+  params:
+  - name: registry-namespace
+    value: The namespace in the container image registry. You can set it up with {bx
+      cr namespace-add]. Learn more at https://cloud.ibm.com/docs/services/Registry?topic=registry-getting-started#getting-started.
+  - name: build-cluster-namespace
+    value: Cluster namespace
+  - name: build-cluster-name
+    value: Build Cluster
+  - name: prod-cluster-namespace
+    value: Cluster namespace
+  - name: build-region
+    value: Build region
+  - name: vault_name
+    value: Specify the Key Protect instance name, where the image signing keys have
+      been stored. The build and validation signer fields contain default names for
+      these signers. The values must match the values created in the Key-Management-Admin-Template.
+      See https://github.com/open-toolchain/key-management-admin-toolchain
+  - name: repository
+    value: The git repo
+  - name: prod-region
+    value: Cluster region
+  - name: app-name
+    value: The name of your app
+  - name: revision
+    value: the branch for the gir repo
+  - name: prod-cluster-name
+    value: Cluster name
+  - name: registry-region
+    value: The IBM Cloud region for image registry
+  - name: api-key
+    value: The IBM Cloud API key is used to access the IBM Cloud Kubernetes Service
+      API and interact with the cluster. You can obtain your API key with 'bx iam
+      api-key-create' or via the console at https://cloud.ibm.com/iam#/apikeys by
+      clicking **Create API key** (Each API key only can be viewed once).
+  - name: prod-resource-group
+    value: Resource Group
+  - name: build-resource-group
+    value: Build Resource Group
+  steps:
+  - name: clone-step
+    image: alpine/git
+    command: '["/bin/sh", "-c"]'
+    args:
+    - "set -e -o pipefail; \r echo \"Cloning $REPOSITORY\";\r git clone -q -b $REVISION\
+      \ $REPOSITORY .;"
+    env:
+    - name: REPOSITORY
+      value: $(inputs.params.repository)
+    - name: REVISION
+      value: $(inputs.params.revision)
+  - name: Signatures Pre-Check
+    image: ibmcom/pipeline-base-image:latest
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |-
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/add_docker.sh")
+      # This script inspect the docker image signatures to ensure compliance
+      source <(curl -s -S -L "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/setup_dind.sh")
+      # configure the container registry
+      REGISTRY_REGION=$(echo "$REGISTRY_REGION" | awk -F ':' '{print $NF;}')
+      ibmcloud cr region-set $REGISTRY_REGION
+      # login docker to ibm container registry
+      ibmcloud cr login
+      # configure DCT and inspect the image
+      export DOCKER_CONTENT_TRUST_SERVER=https://${REGISTRY_URL}:4443
+      docker trust inspect ${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG} | tee _image_inspect.json
+
+      # Check if the Builder signature is present
+      if jq -e ".[] | select(.Name=\"$REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME:$IMAGE_TAG\") | .SignedTags[] | select(.SignedTag=\"$IMAGE_TAG\") | select (.Signers[] | contains(\"$BUILD_SIGNER\"))" _image_inspect.json; then
+        echo "Signature $BUILD_SIGNER found"
+      else
+        echo "Signature $BUILD_SIGNER not found"
+        exit 1
+      fi
+
+      # Check if the Validation signature is present
+      if jq -e ".[] | select(.Name=\"$REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME:$IMAGE_TAG\") | .SignedTags[] | select(.SignedTag=\"$IMAGE_TAG\") | select (.Signers[] | contains(\"$VALIDATION_SIGNER\"))" _image_inspect.json; then
+        echo "Signature $VALIDATION_SIGNER found"
+      else
+        echo "Signature $VALIDATION_SIGNER not found"
+        exit 1
+      fi
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Deploy to Kubernetes
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      # copy the script below into your app code repo (e.g. ./scripts/check_predeploy.sh) and 'source' it from your pipeline job
+      #    source ./scripts/check_predeploy_kubectl.sh
+      # alternatively, you can source it from online script:
+      #    source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_and_deploy_kubectl.sh")
+      # ------------------
+      # source: https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_and_deploy_kubectl.sh
+
+      # This script checks the IBM Container Service cluster is ready, has a namespace configured with access to the private
+      # image registry (using an IBM Cloud API Key), perform a kubectl deploy of container image and check on outcome.
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_and_deploy_kubectl.sh")
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Check health
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |-
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      # copy the script below into your app code repo (e.g. ./scripts/check_health.sh) and 'source' it from your pipeline job
+      #    source ./scripts/check_health.sh
+      # alternatively, you can source it from online script:
+      #    source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_health.sh")
+      # ------------------
+      # source: https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_health.sh
+      # Check liveness and readiness probes to confirm application is healthy
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_health.sh")
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  volumes:
+  - name: task-volume
+    persistentVolumeClaim:
+      name: $(inputs.params.task-pvc)
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: deploy production-task
+spec:
+  params:
+  - name: registry-namespace
+    value: The namespace in the container image registry. You can set it up with {bx
+      cr namespace-add]. Learn more at https://cloud.ibm.com/docs/services/Registry?topic=registry-getting-started#getting-started.
+  - name: build-cluster-namespace
+    value: Cluster namespace
+  - name: build-cluster-name
+    value: Build Cluster
+  - name: prod-cluster-namespace
+    value: Cluster namespace
+  - name: build-region
+    value: Build region
+  - name: vault_name
+    value: Specify the Key Protect instance name, where the image signing keys have
+      been stored. The build and validation signer fields contain default names for
+      these signers. The values must match the values created in the Key-Management-Admin-Template.
+      See https://github.com/open-toolchain/key-management-admin-toolchain
+  - name: repository
+    value: The git repo
+  - name: prod-region
+    value: Cluster region
+  - name: app-name
+    value: The name of your app
+  - name: revision
+    value: the branch for the gir repo
+  - name: prod-cluster-name
+    value: Cluster name
+  - name: registry-region
+    value: The IBM Cloud region for image registry
+  - name: api-key
+    value: The IBM Cloud API key is used to access the IBM Cloud Kubernetes Service
+      API and interact with the cluster. You can obtain your API key with 'bx iam
+      api-key-create' or via the console at https://cloud.ibm.com/iam#/apikeys by
+      clicking **Create API key** (Each API key only can be viewed once).
+  - name: prod-resource-group
+    value: Resource Group
+  - name: build-resource-group
+    value: Build Resource Group
+  steps:
+  - name: clone-step
+    image: alpine/git
+    command: '["/bin/sh", "-c"]'
+    args:
+    - "set -e -o pipefail; \r echo \"Cloning $REPOSITORY\";\r git clone -q -b $REVISION\
+      \ $REPOSITORY .;"
+    env:
+    - name: REPOSITORY
+      value: $(inputs.params.repository)
+    - name: REVISION
+      value: $(inputs.params.revision)
+  - name: Signatures Pre-Check
+    image: ibmcom/pipeline-base-image:latest
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |-
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/add_docker.sh")
+      # This script inspect the docker image signatures to ensure compliance
+      source <(curl -s -S -L "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/setup_dind.sh")
+      # configure the container registry
+      REGISTRY_REGION=$(echo "$REGISTRY_REGION" | awk -F ':' '{print $NF;}')
+      ibmcloud cr region-set $REGISTRY_REGION
+      # login docker to ibm container registry
+      ibmcloud cr login
+      # configure DCT and inspect the image
+      export DOCKER_CONTENT_TRUST_SERVER=https://${REGISTRY_URL}:4443
+      docker trust inspect ${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG} | tee _image_inspect.json
+
+      # Check if the Builder signature is present
+      if jq -e ".[] | select(.Name=\"$REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME:$IMAGE_TAG\") | .SignedTags[] | select(.SignedTag=\"$IMAGE_TAG\") | select (.Signers[] | contains(\"$BUILD_SIGNER\"))" _image_inspect.json; then
+        echo "Signature $BUILD_SIGNER found"
+      else
+        echo "Signature $BUILD_SIGNER not found"
+        exit 1
+      fi
+
+      # Check if the Validation signature is present
+      if jq -e ".[] | select(.Name=\"$REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME:$IMAGE_TAG\") | .SignedTags[] | select(.SignedTag=\"$IMAGE_TAG\") | select (.Signers[] | contains(\"$VALIDATION_SIGNER\"))" _image_inspect.json; then
+        echo "Signature $VALIDATION_SIGNER found"
+      else
+        echo "Signature $VALIDATION_SIGNER not found"
+        exit 1
+      fi
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Deploy to Kubernetes
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      # copy the script below into your app code repo (e.g. ./scripts/check_predeploy.sh) and 'source' it from your pipeline job
+      #    source ./scripts/check_predeploy_kubectl.sh
+      # alternatively, you can source it from online script:
+      #    source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_and_deploy_kubectl.sh")
+      # ------------------
+      # source: https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_and_deploy_kubectl.sh
+
+      # This script checks the IBM Container Service cluster is ready, has a namespace configured with access to the private
+      # image registry (using an IBM Cloud API Key), perform a kubectl deploy of container image and check on outcome.
+      #source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_and_deploy_kubectl.sh")
+      echo "PLACE HOLDER"
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Check health
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |-
+      #!/bin/bash
+      # uncomment to debug the script
+      # set -x
+      # copy the script below into your app code repo (e.g. ./scripts/check_health.sh) and 'source' it from your pipeline job
+      #    source ./scripts/check_health.sh
+      # alternatively, you can source it from online script:
+      #    source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_health.sh")
+      # ------------------
+      # source: https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_health.sh
+      # Check liveness and readiness probes to confirm application is healthy
+      source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_health.sh")
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: GIT_REPO
+      value: $(inputs.params.repo)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  volumes:
+  - name: task-volume
+    persistentVolumeClaim:
+      name: $(inputs.params.task-pvc)

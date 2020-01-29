@@ -1,0 +1,358 @@
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: init docker content trust-task
+spec:
+  params:
+  - name: registry-namespace
+    value: The namespace in the container image registry. You can set it up with {bx
+      cr namespace-add]. Learn more at https://cloud.ibm.com/docs/services/Registry?topic=registry-getting-started#getting-started.
+  - name: build-cluster-namespace
+    value: Cluster namespace
+  - name: build-cluster-name
+    value: Build Cluster
+  - name: prod-cluster-namespace
+    value: Cluster namespace
+  - name: build-region
+    value: Build region
+  - name: vault_name
+    value: Specify the Key Protect instance name, where the image signing keys have
+      been stored. The build and validation signer fields contain default names for
+      these signers. The values must match the values created in the Key-Management-Admin-Template.
+      See https://github.com/open-toolchain/key-management-admin-toolchain
+  - name: repository
+    value: The git repo
+  - name: prod-region
+    value: Cluster region
+  - name: app-name
+    value: The name of your app
+  - name: revision
+    value: the branch for the gir repo
+  - name: prod-cluster-name
+    value: Cluster name
+  - name: registry-region
+    value: The IBM Cloud region for image registry
+  - name: api-key
+    value: The IBM Cloud API key is used to access the IBM Cloud Kubernetes Service
+      API and interact with the cluster. You can obtain your API key with 'bx iam
+      api-key-create' or via the console at https://cloud.ibm.com/iam#/apikeys by
+      clicking **Create API key** (Each API key only can be viewed once).
+  - name: prod-resource-group
+    value: Resource Group
+  - name: build-resource-group
+    value: Build Resource Group
+  steps:
+  - name: clone-step
+    image: alpine/git
+    command: '["/bin/sh", "-c"]'
+    args:
+    - "set -e -o pipefail; \r echo \"Cloning $REPOSITORY\";\r git clone -q -b $REVISION\
+      \ $REPOSITORY .;"
+    env:
+    - name: REPOSITORY
+      value: $(inputs.params.repository)
+    - name: REVISION
+      value: $(inputs.params.revision)
+  - name: Create DCT Keys
+    image: ibmcom/pipeline-base-image:latest
+    command: '["/bin/sh+","-c"]'
+    args:
+    - "#!/bin/bash\nsource <(curl -sSL \"https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/add_docker.sh\"\
+      )\n# Get the notary binary\ncurl -L https://github.com/theupdateframework/notary/releases/download/v0.6.1/notary-Linux-amd64\
+      \ -o /usr/local/bin/notary\n# Make it executable\nchmod +x /usr/local/bin/notary\n\
+      \nexport IBMCLOUD_API_KEY=$IBM_CLOUD_API_KEY\nexport DOCKER_CONTENT_TRUST=1\n\
+      \n# Setup Docker-In-Docker\nsource <(curl -s -S -L \"https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/setup_dind.sh\"\
+      )\n\n# configure the container registry\necho \"REGISTRY REGION $REGISTRY_REGION\"\
+      \nexport REGISTRY_REGION=$(echo \"$REGISTRY_REGION\" | awk -F ':' '{print $NF;}')\n\
+      ibmcloud cr region-set $REGISTRY_REGION\necho \"REGISTRY REGION $REGISTRY_REGION\"\
+      \n\n# login docker to ibm container registry\nibmcloud cr login\n\n# check the\
+      \ existence of the container registry namespace\nREGISTRY_URL=$(ibmcloud cr\
+      \ info | grep -m1 -i '^Container Registry' | awk '{print $3;}')\necho \"Check\
+      \ for $REGISTRY_NAMESPACE existence\"\nif ibmcloud cr namespaces | tail --lines=+4\
+      \ | head --lines=-2 | grep \"^$REGISTRY_NAMESPACE\"; then\n  echo \"$REGISTRY_NAMESPACE\
+      \ exists in $REGISTRY_URL\"\nelse\n  echo \"Creating REGISTRY_NAMESPACE in $REGISTRY_URL\"\
+      \n  ibmcloud cr namespace-add $REGISTRY_NAMESPACE\nfi\n\nexport GUN=\"$REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME\"\
+      \nsource <(curl -s -S -L \"https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/check_signers.sh\"\
+      )\nsource <(curl -sSL \"https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/signing_utils.sh\"\
+      )\nif [ $(findTrustData \"$GUN\") == \"false\" ]; then\n  echo \"NO TRUST DATA\
+      \ FOUND\"\n  # Initialize the repository for Docker Content Trust\n  # Generate\
+      \ passphrase for root and repository keys\n  # see https://docs.docker.com/engine/security/trust/trust_key_mng/#choose-a-passphrase\n\
+      \  if [ -z \"$DOCKER_CONTENT_TRUST_ROOT_PASSPHRASE\" ]; then\n    export DOCKER_CONTENT_TRUST_ROOT_PASSPHRASE=$(openssl\
+      \ rand -base64 16)\n  fi\n  if [ -z \"$DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE\"\
+      \ ]; then\n    export DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE=$(openssl rand\
+      \ -base64 16)\n  fi\n  echo \"Doing Docker Content Trust initialization for\
+      \ GUN $REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME\"\n  source <(curl -s -S\
+      \ -L \"https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/notary_init_gun.sh\"\
+      )\n\n  \n  echo \"Backing-up keys in $VAULT_INSTANCE\"\n  # jsonify the Vault\
+      \ access values\n  VAULT_DATA=$(buildVaultAccessDetailsJSON \"$VAULT_INSTANCE\"\
+      \ \"$IBMCLOUD_TARGET_REGION\" \"$IBMCLOUD_TARGET_RESOURCE_GROUP\")\n  JSON_DATA=\"\
+      $(readData \"$REGISTRY_NAMESPACE.$IMAGE_NAME.keys\" \"$VAULT_DATA\")\"\n  #save\
+      \ the root, repo pem key files to the Vault\n  JSON_ROOT_DATA=$(addTrustFileToJSON\
+      \ \"root\" \"$JSON_ROOT_DATA\" \"$DOCKER_CONTENT_TRUST_ROOT_PASSPHRASE\")\n\
+      \  JSON_ROOT_DATA=$(addTrustFileToJSON \"target\" \"$JSON_ROOT_DATA\" \"$DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE\"\
+      )\n  deleteSecret \"$REGISTRY_NAMESPACE.$IMAGE_NAME.repokeys\" \"$VAULT_DATA\"\
+      \n  saveData \"$REGISTRY_NAMESPACE.$IMAGE_NAME.repokeys\" \"$VAULT_DATA\" \"\
+      $JSON_ROOT_DATA\"\nelse\n #\n echo \"No op\"\n\nfi\n\n\necho \"Create signer\
+      \ $DEVOPS_SIGNER for $REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME\"\necho \"\
+      IMAGE TAG $IMAGE_TAG\"\necho \"Building signer list\"\nsignerList=(\"$DEVOPS_BUILD_SIGNER\"\
+      \ \"$DEVOPS_VALIDATION_SIGNER\")\nfor i in \"${signerList[@]}\"; do\n  echo\
+      \ \"RUNNING ADD SCRIPT FOR $i\";\n  DEVOPS_SIGNER=$i\n  # Restore root & repository\
+      \ keys\n  echo \"Restoring keys from $VAULT_INSTANCE\"\n  source <(curl -sSL\
+      \ \"https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/add_signer.sh\"\
+      )\ndone\n"
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  volumes:
+  - name: task-volume
+    persistentVolumeClaim:
+      name: $(inputs.params.task-pvc)
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: setup iks runtime enforcement in deployment cluster-task
+spec:
+  params:
+  - name: registry-namespace
+    value: The namespace in the container image registry. You can set it up with {bx
+      cr namespace-add]. Learn more at https://cloud.ibm.com/docs/services/Registry?topic=registry-getting-started#getting-started.
+  - name: build-cluster-namespace
+    value: Cluster namespace
+  - name: build-cluster-name
+    value: Build Cluster
+  - name: prod-cluster-namespace
+    value: Cluster namespace
+  - name: build-region
+    value: Build region
+  - name: vault_name
+    value: Specify the Key Protect instance name, where the image signing keys have
+      been stored. The build and validation signer fields contain default names for
+      these signers. The values must match the values created in the Key-Management-Admin-Template.
+      See https://github.com/open-toolchain/key-management-admin-toolchain
+  - name: repository
+    value: The git repo
+  - name: prod-region
+    value: Cluster region
+  - name: app-name
+    value: The name of your app
+  - name: revision
+    value: the branch for the gir repo
+  - name: prod-cluster-name
+    value: Cluster name
+  - name: registry-region
+    value: The IBM Cloud region for image registry
+  - name: api-key
+    value: The IBM Cloud API key is used to access the IBM Cloud Kubernetes Service
+      API and interact with the cluster. You can obtain your API key with 'bx iam
+      api-key-create' or via the console at https://cloud.ibm.com/iam#/apikeys by
+      clicking **Create API key** (Each API key only can be viewed once).
+  - name: prod-resource-group
+    value: Resource Group
+  - name: build-resource-group
+    value: Build Resource Group
+  steps:
+  - name: clone-step
+    image: alpine/git
+    command: '["/bin/sh", "-c"]'
+    args:
+    - "set -e -o pipefail; \r echo \"Cloning $REPOSITORY\";\r git clone -q -b $REVISION\
+      \ $REPOSITORY .;"
+    env:
+    - name: REPOSITORY
+      value: $(inputs.params.repository)
+    - name: REVISION
+      value: $(inputs.params.revision)
+  - name: Create Staging CISE CRD and Secret
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |
+      #!/bin/bash
+      #set -x
+
+      source <(curl -s -S -L "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_helm_up_and_running.sh")
+
+      # Install CISE
+      if helm list cise | grep '^cise'; then
+        echo "Container Image Security Enforcement is already installed"
+      else
+        helm repo add iks-charts https://icr.io/helm/iks-charts
+        helm install --name cise iks-charts/ibmcloud-image-enforcement
+      fi
+
+      # Ensure deployment namespace is created
+      echo "Checking cluster namespace $CLUSTER_NAMESPACE"
+      if ! kubectl get namespace "$CLUSTER_NAMESPACE"; then
+        kubectl create namespace "$CLUSTER_NAMESPACE"
+      fi
+
+      # Define custom user policies
+      echo "Create CISE custom policies"
+      for signer_and_key in $(cat dct_signers.json | jq -r -c '.[] | {name:.Name, key: .Keys[0].ID}'); do
+        DEVOPS_SIGNER=$(echo $signer_and_key | jq -r '.name')
+        DEVOPS_SIGNER_PRIVATE_KEY=$(echo $signer_and_key | jq -r '.key')
+
+        source <(curl -s -S -L "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/create_cise_crd.sh")
+        createCISE_CRD | tee cise_crd_custom_policy.yaml
+
+        echo " "
+        echo "Applying CISE custom policy to $CLUSTER_NAMESPACE"
+        kubectl apply -f cise_crd_custom_policy.yaml -n$CLUSTER_NAMESPACE
+
+        echo "Creating Secret $REGISTRY_NAMESPACE.$IMAGE_NAME.$DEVOPS_SIGNER to provide public key"
+        # ensure the secret is not already existing
+        kubectl delete secret "$REGISTRY_NAMESPACE.$IMAGE_NAME.$DEVOPS_SIGNER" -n$CLUSTER_NAMESPACE \
+          --ignore-not-found=true
+        kubectl create secret generic "$REGISTRY_NAMESPACE.$IMAGE_NAME.$DEVOPS_SIGNER" -n$CLUSTER_NAMESPACE \
+          --from-literal=name=$DEVOPS_SIGNER \
+          --from-file=publicKey=$DEVOPS_SIGNER.pub
+      done
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  - name: Create Production CISE CRD and Secret
+    command: '["/bin/sh+","-c"]'
+    args:
+    - |-
+      #!/bin/bash
+      #set -x
+
+      source <(curl -s -S -L "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/check_helm_up_and_running.sh")
+
+      # Install CISE
+      if helm list cise | grep '^cise'; then
+        echo "Container Image Security Enforcement is already installed"
+      else
+        helm repo add iks-charts https://icr.io/helm/iks-charts
+        helm install --name cise iks-charts/ibmcloud-image-enforcement
+      fi
+
+      # Ensure deployment namespace is created
+      echo "Checking cluster namespace $CLUSTER_NAMESPACE"
+      if ! kubectl get namespace "$CLUSTER_NAMESPACE"; then
+        kubectl create namespace "$CLUSTER_NAMESPACE"
+      fi
+
+      # Define custom user policies
+      echo "Create CISE custom policies"
+      for signer_and_key in $(cat dct_signers.json | jq -r -c '.[] | {name:.Name, key: .Keys[0].ID}'); do
+        DEVOPS_SIGNER=$(echo $signer_and_key | jq -r '.name')
+        DEVOPS_SIGNER_PRIVATE_KEY=$(echo $signer_and_key | jq -r '.key')
+
+        source <(curl -s -S -L "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/image_signing/create_cise_crd.sh")
+        createCISE_CRD | tee cise_crd_custom_policy.yaml
+
+        echo " "
+        echo "Applying CISE custom policy to $CLUSTER_NAMESPACE"
+        echo "PLACE HOLDER POLICY"
+        #kubectl apply -f cise_crd_custom_policy.yaml -n$CLUSTER_NAMESPACE
+
+        #echo "Creating Secret $REGISTRY_NAMESPACE.$IMAGE_NAME.$DEVOPS_SIGNER to provide public key"
+        # ensure the secret is not already existing
+        #kubectl delete secret "$REGISTRY_NAMESPACE.$IMAGE_NAME.$DEVOPS_SIGNER" -n$CLUSTER_NAMESPACE \
+        #  --ignore-not-found=true
+        #kubectl create secret generic "$REGISTRY_NAMESPACE.$IMAGE_NAME.$DEVOPS_SIGNER" -n$CLUSTER_NAMESPACE \
+        #  --from-literal=name=$DEVOPS_SIGNER \
+        # --from-file=publicKey=$DEVOPS_SIGNER.pub
+      done
+    env:
+    - name: VAULT_INSTANCE
+      value: $(inputs.params.vault_name)
+    - name: VALIDATION_SIGNER
+      value: $(inputs.params.validation_signer)
+    - name: BUILD_REGION_ID
+      value: $(inputs.params.prod-region)
+    - name: REGISTRY_REGION_ID
+      value: $(inputs.params.registry-region)
+    - name: BUILD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_CLUSTER_NAMESPACE
+      value: $(inputs.params.build-cluster-namespace)
+    - name: APP_NAME
+      value: $(inputs.params.app-name)
+    - name: REGISTRY_NAMESPACE
+      value: $(inputs.params.registry-namespace)
+    - name: PROD_CLUSTER_NAMESPACE
+      value: $(inputs.params.prod-cluster-namespace)
+    - name: API_KEY
+      value: $(inputs.params.api-key)
+    - name: PROD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: BUILD_CLUSTER_NAME
+      value: $(inputs.params.prod-cluster-name)
+    - name: PROD_RESOURCE_GROUP
+      value: $(inputs.params.prod-resource-group)
+    - name: BUILD_SIGNER
+      value: $(inputs.params.build_signer)
+    - name: PROD_REGION_ID
+      value: $(inputs.params.prod-region)
+    volumeMounts:
+    - monthPath: /artifacts
+      name: task-volume
+  volumes:
+  - name: task-volume
+    persistentVolumeClaim:
+      name: $(inputs.params.task-pvc)
