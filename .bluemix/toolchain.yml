@@ -81,9 +81,10 @@ services:
     service_id: pipeline
     parameters:
       name: 'dct init {{form.pipeline.parameters.registry-namespace}} {{form.pipeline.parameters.app-name}}'
+      type: tekton
       configuration:
         content:
-          $text: init_dct_pipeline.yml
+          $text: nit_dct_pipeline_tekton.yml
         env:
           APP_NAME: '{{form.pipeline.parameters.app-name}}'
           REGISTRY_REGION_ID: '{{form.pipeline.parameters.registry-region}}'
