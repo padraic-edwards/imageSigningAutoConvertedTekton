@@ -39,11 +39,20 @@ services:
       type: $env.type || 'clone'
       has_issues: true
       enable_traceability: false
+  pipeline-repo:
+    service_id: githubpublic
+    parameters:
+      repo_name: 'imageSigningAutoConvertedTekton'
+      repo_url: https://github.com/padraic-edwards/imageSigningAutoConvertedTekton
+      type: link
+      has_issues: false
+      enable_traceability: false
   build:
     service_id: pipeline
     parameters:
       services:
         - repo
+        - pipeline-repo
       name: '{{services.repo.parameters.repo_name}}'
       ui-pipeline: true
       type: tekton
@@ -51,7 +60,7 @@ services:
         content:
           $text: pipeline_tekton.yml
         env:
-          GIT_REPO: repo
+          PIPELINE_REPO: pipeline-repo
           APP_NAME: '{{form.pipeline.parameters.app-name}}'
           REGISTRY_REGION_ID: '{{form.pipeline.parameters.registry-region}}'
           REGISTRY_NAMESPACE: '{{form.pipeline.parameters.registry-namespace}}'
