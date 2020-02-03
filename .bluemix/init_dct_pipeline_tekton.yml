@@ -60,3 +60,9 @@ properties:
 - name: prod-region
   value: ${PROD_REGION_ID}
   type: text
+- name: repo
+  value: ${PIPELINE_REPO}
+  type: text
+- name: revision
+  value: master
+  type: text
