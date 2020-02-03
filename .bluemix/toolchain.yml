@@ -46,9 +46,10 @@ services:
         - repo
       name: '{{services.repo.parameters.repo_name}}'
       ui-pipeline: true
+      type: tekton
       configuration:
         content:
-          $text: pipeline.yml
+          $text: pipeline_tekton.yml
         env:
           GIT_REPO: repo
           APP_NAME: '{{form.pipeline.parameters.app-name}}'
