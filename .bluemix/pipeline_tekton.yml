@@ -2,17 +2,17 @@
 inputs:
 - type: git
   branch: master
-  service: ${GIT_REPO}
+  service: ${PIPELINE_REPO}
   path: .pipeline
 triggers:
 - type: git
   name: Git PR Trigger
-  service: ${GIT_REPO}
+  service: ${PIPELINE_REPO}
   branch: master
   events: '{"push":true,"pull_request":true,"pull_request_closed":false}'
   eventListener: EventListener
 - type: manual
-  name: Manaul Trigger
+  name: Manual Trigger
   eventListener: EventListener
 properties:
 - name: vault_name
@@ -40,7 +40,10 @@ properties:
   value: ${REGISTRY_NAMESPACE}
   type: text
 - name: repo
-  value: ${GIT_REPO}
+  value: ${PIPELINE_REPO}
+  type: text
+- name: revision
+  value: master
   type: text
 - name: prod-cluster-namespace
   value: ${PROD_CLUSTER_NAMESPACE}
