@@ -5,47 +5,53 @@ metadata:
   name: pipeline
 spec:
   params:
+  - name: pipeline-pvc
+    description: pipeline pvc name place holder
   - name: registry-namespace
-    value: The namespace in the container image registry. You can set it up with {bx
-      cr namespace-add]. Learn more at https://cloud.ibm.com/docs/services/Registry?topic=registry-getting-started#getting-started.
+    description: The namespace in the container image registry. You can set it up
+      with {bx cr namespace-add]. Learn more at https://cloud.ibm.com/docs/services/Registry?topic=registry-getting-started#getting-started.
   - name: build-cluster-namespace
-    value: Cluster namespace
+    description: Cluster namespace
   - name: build-cluster-name
-    value: Build Cluster
+    description: Build Cluster
   - name: prod-cluster-namespace
-    value: Cluster namespace
+    description: Cluster namespace
   - name: build-region
-    value: Build region
+    description: Build region
   - name: vault_name
-    value: Specify the Key Protect instance name, where the image signing keys have
-      been stored. The build and validation signer fields contain default names for
-      these signers. The values must match the values created in the Key-Management-Admin-Template.
+    description: Specify the Key Protect instance name, where the image signing keys
+      have been stored. The build and validation signer fields contain default names
+      for these signers. The values must match the values created in the Key-Management-Admin-Template.
       See https://github.com/open-toolchain/key-management-admin-toolchain
   - name: repository
-    value: The git repo
+    description: The git repo
   - name: prod-region
-    value: Cluster region
+    description: Cluster region
   - name: app-name
-    value: The name of your app
+    description: The name of your app
   - name: revision
-    value: the branch for the gir repo
+    description: the branch for the git repo
   - name: prod-cluster-name
-    value: Cluster name
+    description: Cluster name
   - name: registry-region
-    value: The IBM Cloud region for image registry
+    description: The IBM Cloud region for image registry
   - name: api-key
-    value: The IBM Cloud API key is used to access the IBM Cloud Kubernetes Service
-      API and interact with the cluster. You can obtain your API key with 'bx iam
-      api-key-create' or via the console at https://cloud.ibm.com/iam#/apikeys by
-      clicking **Create API key** (Each API key only can be viewed once).
+    description: The IBM Cloud API key is used to access the IBM Cloud Kubernetes
+      Service API and interact with the cluster. You can obtain your API key with
+      'bx iam api-key-create' or via the console at https://cloud.ibm.com/iam#/apikeys
+      by clicking **Create API key** (Each API key only can be viewed once).
   - name: prod-resource-group
-    value: Resource Group
+    description: Resource Group
   - name: build-resource-group
-    value: Build Resource Group
+    description: Build Resource Group
+  - name: validation_signer
+    description: VALIDATION_SIGNER
+  - name: build_signer
+    description: BUILD_SIGNER
   tasks:
-  - name: init docker content trust
+  - name: init-docker-content-trust
     taskRef:
-      name: init docker content trust-task
+      name: init-docker-content-trust-task
     params:
     - name: task-pvc
       value: $(params.pipeline-pvc)
@@ -79,10 +85,14 @@ spec:
       value: $(params.prod-resource-group)
     - name: build-resource-group
       value: $(params.build-resource-group)
-  - name: setup iks runtime enforcement in deployment cluster
+    - name: validation_signer
+      value: $(params.validation_signer)
+    - name: build_signer
+      value: $(params.build_signer)
+  - name: setup-iks-runtime-enforcement-in-deployment-cluster
     taskRef:
-      name: setup iks runtime enforcement in deployment cluster-task
-    runAfter: '[init docker content trust]'
+      name: setup-iks-runtime-enforcement-in-deployment-cluster-task
+    runAfter: [init-docker-content-trust]
     params:
     - name: task-pvc
       value: $(params.pipeline-pvc)
@@ -116,3 +126,7 @@ spec:
       value: $(params.prod-resource-group)
     - name: build-resource-group
       value: $(params.build-resource-group)
+    - name: validation_signer
+      value: $(params.validation_signer)
+    - name: build_signer
+      value: $(params.build_signer)
